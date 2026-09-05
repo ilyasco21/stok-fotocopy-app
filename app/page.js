@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { Html5QrcodeScanner } from 'html5-qrcode'
 
 export default function Home() {
   const [items, setItems] = useState([])
@@ -10,7 +11,7 @@ export default function Home() {
   const [search, setSearch] = useState('')
 
   // State Identitas User / Teknisi
-  const [user, setUser] = useState(null) // { nama: '', area: '' }
+  const [user, setUser] = useState(null)
   const [inputNama, setInputNama] = useState('')
   const [selectedArea, setSelectedArea] = useState('PIK 2')
 
@@ -19,6 +20,9 @@ export default function Home() {
   const [pinInput, setPinInput] = useState('')
   const [showPinModal, setShowPinModal] = useState(false)
   const [showLogModal, setShowLogModal] = useState(false)
+
+  // State Scanner Kamera
+  const [showScanner, setShowScanner] = useState(false)
 
   // State Form Tambah Barang (Admin)
   const [namaBarang, setNamaBarang] = useState('')
@@ -31,13 +35,41 @@ export default function Home() {
   const listArea = ['PIK 2', 'Tangerang', 'Jakarta Pusat', 'Gading Serpong', 'Pusat']
 
   useEffect(() => {
-    // Cek session teknisi di localStorage
     const savedUser = localStorage.getItem('stok_user')
     if (savedUser) {
       setUser(JSON.parse(savedUser))
     }
     fetchItems()
   }, [])
+
+  // Inisialisasi Scanner Kamera saat Modal Scanner Dibuka
+  useEffect(() => {
+    let scanner = null
+    if (showScanner) {
+      scanner = new Html5QrcodeScanner(
+        'reader',
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        /* verbose= */ false
+      )
+
+      scanner.render(
+        (decodedText) => {
+          setSearch(decodedText)
+          setShowScanner(false)
+          scanner.clear()
+        },
+        (error) => {
+          // mengabaikan error per-frame pencarian
+        }
+      )
+    }
+
+    return () => {
+      if (scanner) {
+        scanner.clear().catch((err) => console.error(err))
+      }
+    }
+  }, [showScanner])
 
   async function fetchItems() {
     setLoading(true)
@@ -60,7 +92,6 @@ export default function Home() {
     if (!error) setLogs(data || [])
   }
 
-  // Simpan Sesi Login Teknisi
   function handleSetUser(e) {
     e.preventDefault()
     if (!inputNama) return alert('Masukkan nama kamu!')
@@ -75,7 +106,6 @@ export default function Home() {
     setIsAdmin(false)
   }
 
-  // Verifikasi PIN Admin
   function handleLoginAdmin(e) {
     e.preventDefault()
     if (pinInput === '1234') {
@@ -87,7 +117,6 @@ export default function Home() {
     }
   }
 
-  // Tambah Master Barang (Admin)
   async function handleAddItem(e) {
     e.preventDefault()
     if (!namaBarang) return alert('Nama barang wajib diisi!')
@@ -115,12 +144,10 @@ export default function Home() {
     }
   }
 
-  // Update Stok & Catat Log Transaksi
   async function handleUpdateStok(item, amount) {
     const newStok = item.stok + amount
     if (newStok < 0) return alert('Stok tidak boleh minus!')
 
-    // 1. Update Stok di Inventory
     const { error: updateErr } = await supabase
       .from('inventory')
       .update({ stok: newStok })
@@ -128,7 +155,6 @@ export default function Home() {
 
     if (updateErr) return alert('Gagal update stok: ' + updateErr.message)
 
-    // 2. Catat Riwayat di Stock Logs
     await supabase.from('stock_logs').insert([
       {
         nama_barang: item.nama_barang,
@@ -143,19 +169,16 @@ export default function Home() {
     fetchItems()
   }
 
-  // Filter Barang Berdasarkan Area & Pencarian
   const filteredItems = items.filter((item) => {
     const matchSearch =
       item.nama_barang?.toLowerCase().includes(search.toLowerCase()) ||
       item.kode_part?.toLowerCase().includes(search.toLowerCase())
 
-    // Admin bisa lihat semua, Teknisi hanya area miliknya
     const matchArea = isAdmin ? true : item.area === user?.area
 
     return matchSearch && matchArea
   })
 
-  // JIKA BELUM LOGIN TEKNISI
   if (!user) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', fontFamily: 'Arial, sans-serif' }}>
@@ -224,6 +247,19 @@ export default function Home() {
           </button>
         </div>
       </div>
+
+      {/* Modal Scanner Kamera */}
+      {showScanner && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#fff', padding: '20px', borderRadius: '12px', width: '90%', maxWidth: '400px', textAlign: 'center' }}>
+            <h3 style={{ marginTop: 0 }}>📷 Scan Barcode / QR Code</h3>
+            <div id="reader" style={{ width: '100%' }}></div>
+            <button onClick={() => setShowScanner(false)} style={{ marginTop: '15px', background: '#ef4444', color: '#fff', border: 'none', padding: '10px 20px', borderRadius: '6px', cursor: 'pointer' }}>
+              Batal
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Modal Input PIN Admin */}
       {showPinModal && (
@@ -303,14 +339,22 @@ export default function Home() {
         </div>
       )}
 
-      {/* Bar Pencarian */}
-      <input
-        type="text"
-        placeholder={`🔍 Cari barang/kode part di area ${isAdmin ? 'Semua Area (Mode Admin)' : user.area}...`}
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '15px', boxSizing: 'border-box', marginBottom: '20px' }}
-      />
+      {/* Bar Pencarian & Tombol Scan Barcode Kamera */}
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+        <input
+          type="text"
+          placeholder={`🔍 Cari barang/kode part di area ${isAdmin ? 'Semua Area (Mode Admin)' : user.area}...`}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '15px', boxSizing: 'border-box' }}
+        />
+        <button
+          onClick={() => setShowScanner(true)}
+          style={{ background: '#0284c7', color: '#fff', border: 'none', padding: '0 16px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          📷 Scan Kamera
+        </button>
+      </div>
 
       {/* Tabel Data Stok */}
       {loading ? (
