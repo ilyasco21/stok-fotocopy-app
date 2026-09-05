@@ -19,6 +19,12 @@ export default function Home() {
   const [pinInput, setPinInput] = useState('')
   const [showPinModal, setShowPinModal] = useState(false)
   const [showLogModal, setShowLogModal] = useState(false)
+  const [showTransferModal, setShowTransferModal] = useState(false)
+
+  // State Transfer Stok
+  const [transferItem, setTransferItem] = useState(null)
+  const [targetArea, setTargetArea] = useState('Tangerang')
+  const [transferQty, setTransferQty] = useState(1)
 
   // State Scanner Kamera
   const [showScanner, setShowScanner] = useState(false)
@@ -41,7 +47,7 @@ export default function Home() {
     fetchItems()
   }, [])
 
-  // Inisialisasi Dynamic Import untuk html5-qrcode
+  // Dynamic Import untuk Scanner Kamera
   useEffect(() => {
     let html5QrcodeScanner = null
 
@@ -90,9 +96,102 @@ export default function Home() {
       .from('stock_logs')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(30)
+      .limit(100)
 
     if (!error) setLogs(data || [])
+  }
+
+  // Fitur Ekspor Excel
+  function exportStokToExcel() {
+    import('xlsx').then((XLSX) => {
+      const dataToExport = filteredItems.map((item) => ({
+        'Nama Barang': item.nama_barang,
+        'Kode Part': item.kode_part || '-',
+        'Kategori': item.kategori,
+        'Area': item.area || 'Pusat',
+        'Lokasi Rak': item.lokasi || '-',
+        'Sisa Stok': item.stok,
+      }))
+
+      const worksheet = XLSX.utils.json_to_sheet(dataToExport)
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Laporan Stok')
+      XLSX.writeFile(workbook, `Laporan_Stok_${user?.area || 'Semua'}.xlsx`)
+    })
+  }
+
+  function exportLogsToExcel() {
+    import('xlsx').then((XLSX) => {
+      const dataToExport = logs.map((log) => ({
+        'Waktu': new Date(log.created_at).toLocaleString('id-ID'),
+        'Nama Teknisi': log.nama_teknisi,
+        'Area': log.area,
+        'Nama Barang': log.nama_barang,
+        'Aksi': log.aksi,
+        'Jumlah': log.jumlah,
+      }))
+
+      const worksheet = XLSX.utils.json_to_sheet(dataToExport)
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Riwayat Transaksi')
+      XLSX.writeFile(workbook, 'Riwayat_Transaksi_Stok.xlsx')
+    })
+  }
+
+  // Fitur Transfer Stok Antar-Area
+  async function handleTransferStok(e) {
+    e.preventDefault()
+    if (!transferItem || transferQty <= 0) return
+    if (transferItem.stok < transferQty) return alert('Stok asal tidak mencukupi!')
+
+    // 1. Kurangi stok dari area asal
+    await supabase
+      .from('inventory')
+      .update({ stok: transferItem.stok - transferQty })
+      .eq('id', transferItem.id)
+
+    // 2. Tambah barang ke area tujuan (atau buat baru jika belum ada)
+    const { data: existing } = await supabase
+      .from('inventory')
+      .select('*')
+      .eq('nama_barang', transferItem.nama_barang)
+      .eq('area', targetArea)
+      .single()
+
+    if (existing) {
+      await supabase
+        .from('inventory')
+        .update({ stok: existing.stok + parseInt(transferQty) })
+        .eq('id', existing.id)
+    } else {
+      await supabase.from('inventory').insert([
+        {
+          nama_barang: transferItem.nama_barang,
+          kode_part: transferItem.kode_part,
+          kategori: transferItem.kategori,
+          stok: parseInt(transferQty),
+          lokasi: transferItem.lokasi,
+          area: targetArea,
+        },
+      ])
+    }
+
+    // 3. Catat Log Transfer
+    await supabase.from('stock_logs').insert([
+      {
+        nama_barang: transferItem.nama_barang,
+        kode_part: transferItem.kode_part,
+        aksi: `MUTASI (${transferItem.area || 'Pusat'} -> ${targetArea})`,
+        jumlah: transferQty,
+        nama_teknisi: user?.nama || 'Admin',
+        area: transferItem.area || 'Pusat',
+      },
+    ])
+
+    setShowTransferModal(false)
+    setTransferItem(null)
+    fetchItems()
+    alert('Transfer stok berhasil!')
   }
 
   function handleSetUser(e) {
@@ -230,11 +329,14 @@ export default function Home() {
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {isAdmin ? (
             <>
               <button onClick={() => { fetchLogs(); setShowLogModal(true); }} style={{ background: '#8b5cf6', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
                 📋 Log Transaksi
+              </button>
+              <button onClick={exportStokToExcel} style={{ background: '#16a34a', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
+                📊 Excel Stok
               </button>
               <button onClick={() => setIsAdmin(false)} style={{ background: '#64748b', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
                 Exit Admin
@@ -264,6 +366,31 @@ export default function Home() {
         </div>
       )}
 
+      {/* Modal Transfer Stok */}
+      {showTransferModal && transferItem && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
+          <form onSubmit={handleTransferStok} style={{ background: '#fff', padding: '25px', borderRadius: '8px', width: '320px' }}>
+            <h3 style={{ marginTop: 0 }}>🔄 Transfer Stok Barang</h3>
+            <p style={{ fontSize: '14px', color: '#64748b', marginBottom: '15px' }}>{transferItem.nama_barang} (Stok Saat Ini: {transferItem.stok})</p>
+            
+            <label style={{ fontSize: '12px', fontWeight: 'bold' }}>AREA TUJUAN</label>
+            <select value={targetArea} onChange={(e) => setTargetArea(e.target.value)} style={{ width: '100%', padding: '8px', marginTop: '4px', marginBottom: '15px', borderRadius: '4px', border: '1px solid #ccc' }}>
+              {listArea.filter(a => a !== (transferItem.area || 'Pusat')).map(a => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+
+            <label style={{ fontSize: '12px', fontWeight: 'bold' }}>JUMLAH TRANSFER</label>
+            <input type="number" min="1" max={transferItem.stok} value={transferQty} onChange={(e) => setTransferQty(e.target.value)} style={{ width: '100%', padding: '8px', marginTop: '4px', marginBottom: '20px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }} required />
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button type="submit" style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer' }}>Kirim</button>
+              <button type="button" onClick={() => setShowTransferModal(false)} style={{ flex: 1, background: '#e2e8f0', color: '#334155', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer' }}>Batal</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Modal Input PIN Admin */}
       {showPinModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
@@ -290,8 +417,11 @@ export default function Home() {
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
           <div style={{ background: '#fff', padding: '25px', borderRadius: '8px', width: '90%', maxWidth: '700px', maxHeight: '80vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-              <h3 style={{ margin: 0 }}>📋 Log Riwayat Transaksi (30 Terakhir)</h3>
-              <button onClick={() => setShowLogModal(false)} style={{ background: '#e2e8f0', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer' }}>Tutup</button>
+              <h3 style={{ margin: 0 }}>📋 Log Riwayat Transaksi</h3>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button onClick={exportLogsToExcel} style={{ background: '#16a34a', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>📊 Excel Log</button>
+                <button onClick={() => setShowLogModal(false)} style={{ background: '#e2e8f0', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>Tutup</button>
+              </div>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
               <thead>
@@ -382,19 +512,31 @@ export default function Home() {
                 </td>
               </tr>
             ) : (
-              filteredItems.map((item) => (
-                <tr key={item.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                  <td style={{ padding: '12px', fontWeight: 'bold', color: '#0f172a' }}>{item.nama_barang}</td>
-                  <td style={{ padding: '12px', color: '#64748b' }}>{item.kode_part || '-'}</td>
-                  {isAdmin && <td style={{ padding: '12px', color: '#2563eb', fontWeight: 'bold' }}>{item.area || 'Pusat'}</td>}
-                  <td style={{ padding: '12px', color: '#64748b' }}>{item.lokasi || '-'}</td>
-                  <td style={{ padding: '12px', textAlign: 'center', fontSize: '18px', fontWeight: 'bold' }}>{item.stok}</td>
-                  <td style={{ padding: '12px', textAlign: 'center' }}>
-                    <button onClick={() => handleUpdateStok(item, -1)} style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 12px', marginRight: '5px', cursor: 'pointer', fontWeight: 'bold' }}>-1</button>
-                    <button onClick={() => handleUpdateStok(item, 1)} style={{ background: '#22c55e', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 12px', cursor: 'pointer', fontWeight: 'bold' }}>+1</button>
-                  </td>
-                </tr>
-              ))
+              filteredItems.map((item) => {
+                const isLowStock = item.stok <= 2
+
+                return (
+                  <tr key={item.id} style={{ borderBottom: '1px solid #e2e8f0', background: isLowStock ? '#fef2f2' : 'transparent' }}>
+                    <td style={{ padding: '12px', fontWeight: 'bold', color: '#0f172a' }}>
+                      {item.nama_barang}
+                      {isLowStock && <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', fontSize: '10px', padding: '2px 6px', borderRadius: '4px' }}>STOK TIPIS</span>}
+                    </td>
+                    <td style={{ padding: '12px', color: '#64748b' }}>{item.kode_part || '-'}</td>
+                    {isAdmin && <td style={{ padding: '12px', color: '#2563eb', fontWeight: 'bold' }}>{item.area || 'Pusat'}</td>}
+                    <td style={{ padding: '12px', color: '#64748b' }}>{item.lokasi || '-'}</td>
+                    <td style={{ padding: '12px', textAlign: 'center', fontSize: '18px', fontWeight: 'bold', color: isLowStock ? '#dc2626' : '#0f172a' }}>
+                      {item.stok}
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'center' }}>
+                      <button onClick={() => handleUpdateStok(item, -1)} style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 12px', marginRight: '5px', cursor: 'pointer', fontWeight: 'bold' }}>-1</button>
+                      <button onClick={() => handleUpdateStok(item, 1)} style={{ background: '#22c55e', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 12px', cursor: 'pointer', fontWeight: 'bold' }}>+1</button>
+                      {isAdmin && (
+                        <button onClick={() => { setTransferItem(item); setShowTransferModal(true); }} style={{ background: '#eab308', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 8px', marginLeft: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>🔄 Transfer</button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })
             )}
           </tbody>
         </table>
