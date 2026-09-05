@@ -1,8 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { Html5QrcodeScanner } from 'html5-qrcode'
 
 export default function Home() {
   const [items, setItems] = useState([])
@@ -42,31 +41,35 @@ export default function Home() {
     fetchItems()
   }, [])
 
-  // Inisialisasi Scanner Kamera saat Modal Scanner Dibuka
+  // Inisialisasi Dynamic Import untuk html5-qrcode
   useEffect(() => {
-    let scanner = null
-    if (showScanner) {
-      scanner = new Html5QrcodeScanner(
-        'reader',
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        /* verbose= */ false
-      )
+    let html5QrcodeScanner = null
 
-      scanner.render(
-        (decodedText) => {
-          setSearch(decodedText)
-          setShowScanner(false)
-          scanner.clear()
-        },
-        (error) => {
-          // mengabaikan error per-frame pencarian
-        }
-      )
+    if (showScanner) {
+      import('html5-qrcode').then((module) => {
+        const Html5QrcodeScanner = module.Html5QrcodeScanner
+        html5QrcodeScanner = new Html5QrcodeScanner(
+          'reader',
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          false
+        )
+
+        html5QrcodeScanner.render(
+          (decodedText) => {
+            setSearch(decodedText)
+            setShowScanner(false)
+            if (html5QrcodeScanner) {
+              html5QrcodeScanner.clear()
+            }
+          },
+          () => {}
+        )
+      })
     }
 
     return () => {
-      if (scanner) {
-        scanner.clear().catch((err) => console.error(err))
+      if (html5QrcodeScanner) {
+        html5QrcodeScanner.clear().catch((err) => console.error(err))
       }
     }
   }, [showScanner])
