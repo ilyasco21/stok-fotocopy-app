@@ -9,17 +9,16 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
 
-  // State Identitas User / Teknisi
+  // State User Sesi Login
   const [user, setUser] = useState(null)
-  const [inputNama, setInputNama] = useState('')
-  const [selectedArea, setSelectedArea] = useState('PIK 2')
+  const [inputUsername, setInputUsername] = useState('')
+  const [inputPassword, setInputPassword] = useState('')
+  const [loginError, setLoginError] = useState('')
 
-  // State Admin & PIN
-  const [isAdmin, setIsAdmin] = useState(false)
-  const [pinInput, setPinInput] = useState('')
-  const [showPinModal, setShowPinModal] = useState(false)
+  // State Modals
   const [showLogModal, setShowLogModal] = useState(false)
   const [showTransferModal, setShowTransferModal] = useState(false)
+  const [showAddUserModal, setShowAddUserModal] = useState(false)
 
   // State Transfer Stok
   const [transferItem, setTransferItem] = useState(null)
@@ -37,17 +36,24 @@ export default function Home() {
   const [lokasi, setLokasi] = useState('')
   const [areaBarang, setAreaBarang] = useState('PIK 2')
 
+  // State Form Tambah User Baru (Admin)
+  const [newUsername, setNewUsername] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newNamaLengkap, setNewNamaLengkap] = useState('')
+  const [newRole, setNewRole] = useState('teknisi')
+  const [newArea, setNewArea] = useState('PIK 2')
+
   const listArea = ['PIK 2', 'Tangerang', 'Jakarta Pusat', 'Gading Serpong', 'Pusat']
 
   useEffect(() => {
-    const savedUser = localStorage.getItem('stok_user')
+    const savedUser = localStorage.getItem('stok_user_session')
     if (savedUser) {
       setUser(JSON.parse(savedUser))
     }
     fetchItems()
   }, [])
 
-  // Dynamic Import untuk Scanner Kamera
+  // Dynamic Import Scanner Kamera
   useEffect(() => {
     let html5QrcodeScanner = null
 
@@ -101,7 +107,67 @@ export default function Home() {
     if (!error) setLogs(data || [])
   }
 
-  // Fitur Ekspor Excel
+  // Proses Login Verifikasi Database
+  async function handleLogin(e) {
+    e.preventDefault()
+    setLoginError('')
+
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', inputUsername.toLowerCase().trim())
+      .eq('password', inputPassword)
+      .single()
+
+    if (error || !data) {
+      setLoginError('Username atau Password salah!')
+      return
+    }
+
+    const sessionData = {
+      id: data.id,
+      username: data.username,
+      nama: data.nama_lengkap,
+      role: data.role,
+      area: data.area,
+    }
+
+    setUser(sessionData)
+    localStorage.setItem('stok_user_session', JSON.stringify(sessionData))
+    setInputUsername('')
+    setInputPassword('')
+  }
+
+  function handleLogout() {
+    localStorage.removeItem('stok_user_session')
+    setUser(null)
+  }
+
+  // Tambah User/Akun Baru (Khusus Admin)
+  async function handleCreateUser(e) {
+    e.preventDefault()
+    const { error } = await supabase.from('users').insert([
+      {
+        username: newUsername.toLowerCase().trim(),
+        password: newPassword,
+        nama_lengkap: newNamaLengkap,
+        role: newRole,
+        area: newArea,
+      },
+    ])
+
+    if (error) {
+      alert('Gagal buat akun: ' + error.message)
+    } else {
+      alert('Akun baru berhasil dibuat!')
+      setNewUsername('')
+      setNewPassword('')
+      setNewNamaLengkap('')
+      setShowAddUserModal(false)
+    }
+  }
+
+  // Ekspor Excel
   function exportStokToExcel() {
     import('xlsx').then((XLSX) => {
       const dataToExport = filteredItems.map((item) => ({
@@ -138,19 +204,17 @@ export default function Home() {
     })
   }
 
-  // Fitur Transfer Stok Antar-Area
+  // Transfer Stok
   async function handleTransferStok(e) {
     e.preventDefault()
     if (!transferItem || transferQty <= 0) return
     if (transferItem.stok < transferQty) return alert('Stok asal tidak mencukupi!')
 
-    // 1. Kurangi stok dari area asal
     await supabase
       .from('inventory')
       .update({ stok: transferItem.stok - transferQty })
       .eq('id', transferItem.id)
 
-    // 2. Tambah barang ke area tujuan (atau buat baru jika belum ada)
     const { data: existing } = await supabase
       .from('inventory')
       .select('*')
@@ -176,7 +240,6 @@ export default function Home() {
       ])
     }
 
-    // 3. Catat Log Transfer
     await supabase.from('stock_logs').insert([
       {
         nama_barang: transferItem.nama_barang,
@@ -194,31 +257,7 @@ export default function Home() {
     alert('Transfer stok berhasil!')
   }
 
-  function handleSetUser(e) {
-    e.preventDefault()
-    if (!inputNama) return alert('Masukkan nama kamu!')
-    const userData = { nama: inputNama, area: selectedArea }
-    setUser(userData)
-    localStorage.setItem('stok_user', JSON.stringify(userData))
-  }
-
-  function handleLogoutUser() {
-    localStorage.removeItem('stok_user')
-    setUser(null)
-    setIsAdmin(false)
-  }
-
-  function handleLoginAdmin(e) {
-    e.preventDefault()
-    if (pinInput === '1234') {
-      setIsAdmin(true)
-      setShowPinModal(false)
-      setPinInput('')
-    } else {
-      alert('PIN Admin Salah!')
-    }
-  }
-
+  // Tambah Barang (Admin)
   async function handleAddItem(e) {
     e.preventDefault()
     if (!namaBarang) return alert('Nama barang wajib diisi!')
@@ -246,6 +285,7 @@ export default function Home() {
     }
   }
 
+  // Update Stok
   async function handleUpdateStok(item, amount) {
     const newStok = item.stok + amount
     if (newStok < 0) return alert('Stok tidak boleh minus!')
@@ -276,41 +316,47 @@ export default function Home() {
       item.nama_barang?.toLowerCase().includes(search.toLowerCase()) ||
       item.kode_part?.toLowerCase().includes(search.toLowerCase())
 
-    const matchArea = isAdmin ? true : item.area === user?.area
+    const matchArea = user?.role === 'admin' ? true : item.area === user?.area
 
     return matchSearch && matchArea
   })
 
+  // HALAMAN LOGIN UTAMA
   if (!user) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', fontFamily: 'Arial, sans-serif' }}>
-        <form onSubmit={handleSetUser} style={{ background: '#fff', padding: '30px', borderRadius: '12px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', width: '320px' }}>
-          <h2 style={{ marginTop: 0, textAlign: 'center', color: '#0f172a' }}>🔑 Login Teknisi</h2>
-          <p style={{ textAlign: 'center', color: '#64748b', fontSize: '14px', marginBottom: '20px' }}>Masukan nama dan area tugas kamu</p>
+        <form onSubmit={handleLogin} style={{ background: '#fff', padding: '30px', borderRadius: '12px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', width: '320px' }}>
+          <h2 style={{ marginTop: 0, textAlign: 'center', color: '#0f172a' }}>🔐 Login Stok Opname</h2>
+          <p style={{ textAlign: 'center', color: '#64748b', fontSize: '13px', marginBottom: '20px' }}>Masukkan Username & Password</p>
           
-          <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#334155' }}>NAMA TEKNISI</label>
+          {loginError && (
+            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', padding: '8px', borderRadius: '6px', fontSize: '12px', marginBottom: '15px', textAlign: 'center' }}>
+              {loginError}
+            </div>
+          )}
+
+          <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#334155' }}>USERNAME</label>
           <input
             type="text"
-            placeholder="Contoh: Budi / Tirta"
-            value={inputNama}
-            onChange={(e) => setInputNama(e.target.value)}
+            placeholder="Contoh: tirta / admin"
+            value={inputUsername}
+            onChange={(e) => setInputUsername(e.target.value)}
             style={{ width: '100%', padding: '10px', marginTop: '4px', marginBottom: '15px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }}
             required
           />
 
-          <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#334155' }}>AREA TUGAS</label>
-          <select
-            value={selectedArea}
-            onChange={(e) => setSelectedArea(e.target.value)}
+          <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#334155' }}>PASSWORD</label>
+          <input
+            type="password"
+            placeholder="••••••••"
+            value={inputPassword}
+            onChange={(e) => setInputPassword(e.target.value)}
             style={{ width: '100%', padding: '10px', marginTop: '4px', marginBottom: '20px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }}
-          >
-            {listArea.map((a) => (
-              <option key={a} value={a}>{a}</option>
-            ))}
-          </select>
+            required
+          />
 
           <button type="submit" style={{ width: '100%', background: '#2563eb', color: '#fff', border: 'none', padding: '12px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>
-            Masuk Aplikasi
+            Masuk Akun
           </button>
         </form>
       </div>
@@ -320,38 +366,67 @@ export default function Home() {
   return (
     <div style={{ padding: '20px', maxWidth: '1000px', margin: '0 auto', fontFamily: 'Arial, sans-serif' }}>
       
-      {/* Header Info User & Area */}
+      {/* Header Info User */}
       <div style={{ background: '#0f172a', color: '#fff', padding: '16px 20px', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
         <div>
           <h2 style={{ margin: 0, fontSize: '20px' }}>📦 Stok Opname Fotokopi</h2>
           <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#94a3b8' }}>
-            Teknisi: <strong>{user.nama}</strong> | Area: <span style={{ background: '#2563eb', padding: '2px 8px', borderRadius: '4px', color: '#fff' }}>{user.area}</span>
+            User: <strong>{user.nama}</strong> ({user.role.toUpperCase()}) | Area: <span style={{ background: '#2563eb', padding: '2px 8px', borderRadius: '4px', color: '#fff' }}>{user.area}</span>
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          {isAdmin ? (
+          {user.role === 'admin' && (
             <>
+              <button onClick={() => setShowAddUserModal(true)} style={{ background: '#0284c7', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
+                👤 +Akun User
+              </button>
               <button onClick={() => { fetchLogs(); setShowLogModal(true); }} style={{ background: '#8b5cf6', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
                 📋 Log Transaksi
               </button>
               <button onClick={exportStokToExcel} style={{ background: '#16a34a', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
                 📊 Excel Stok
               </button>
-              <button onClick={() => setIsAdmin(false)} style={{ background: '#64748b', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
-                Exit Admin
-              </button>
             </>
-          ) : (
-            <button onClick={() => setShowPinModal(true)} style={{ background: '#1e293b', border: '1px solid #475569', color: '#fff', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
-              🔒 Mode Admin
-            </button>
           )}
-          <button onClick={handleLogoutUser} style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
-            Ganti User
+          <button onClick={handleLogout} style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
+            Logout
           </button>
         </div>
       </div>
+
+      {/* Modal Tambah Akun User Baru (Admin Only) */}
+      {showAddUserModal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
+          <form onSubmit={handleCreateUser} style={{ background: '#fff', padding: '25px', borderRadius: '8px', width: '320px' }}>
+            <h3 style={{ marginTop: 0 }}>👤 Buat Akun User Baru</h3>
+            <label style={{ fontSize: '11px', fontWeight: 'bold' }}>NAMA LENGKAP</label>
+            <input type="text" placeholder="Nama Teknisi" value={newNamaLengkap} onChange={(e) => setNewNamaLengkap(e.target.value)} style={{ width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }} required />
+
+            <label style={{ fontSize: '11px', fontWeight: 'bold' }}>USERNAME</label>
+            <input type="text" placeholder="Username login" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} style={{ width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }} required />
+
+            <label style={{ fontSize: '11px', fontWeight: 'bold' }}>PASSWORD</label>
+            <input type="password" placeholder="Password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{ width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }} required />
+
+            <label style={{ fontSize: '11px', fontWeight: 'bold' }}>ROLE</label>
+            <select value={newRole} onChange={(e) => setNewRole(e.target.value)} style={{ width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '4px', border: '1px solid #ccc' }}>
+              <option value="teknisi">Teknisi</option>
+              <option value="admin">Admin</option>
+            </select>
+
+            <label style={{ fontSize: '11px', fontWeight: 'bold' }}>AREA TUGAS</label>
+            <select value={newArea} onChange={(e) => setNewArea(e.target.value)} style={{ width: '100%', padding: '8px', marginBottom: '20px', borderRadius: '4px', border: '1px solid #ccc' }}>
+              {listArea.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button type="submit" style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer' }}>Simpan</button>
+              <button type="button" onClick={() => setShowAddUserModal(false)} style={{ flex: 1, background: '#e2e8f0', color: '#334155', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer' }}>Batal</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Modal Scanner Kamera */}
       {showScanner && (
@@ -386,27 +461,6 @@ export default function Home() {
             <div style={{ display: 'flex', gap: '10px' }}>
               <button type="submit" style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer' }}>Kirim</button>
               <button type="button" onClick={() => setShowTransferModal(false)} style={{ flex: 1, background: '#e2e8f0', color: '#334155', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer' }}>Batal</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* Modal Input PIN Admin */}
-      {showPinModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
-          <form onSubmit={handleLoginAdmin} style={{ background: '#fff', padding: '25px', borderRadius: '8px', width: '300px', textAlign: 'center' }}>
-            <h3 style={{ marginTop: 0 }}>PIN Admin Gudang</h3>
-            <input
-              type="password"
-              placeholder="Default: 1234"
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-              style={{ width: '100%', padding: '10px', boxSizing: 'border-box', marginBottom: '15px', borderRadius: '4px', border: '1px solid #ccc', textAlign: 'center', fontSize: '18px' }}
-              autoFocus
-            />
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button type="submit" style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer' }}>Masuk</button>
-              <button type="button" onClick={() => setShowPinModal(false)} style={{ flex: 1, background: '#e2e8f0', color: '#334155', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer' }}>Batal</button>
             </div>
           </form>
         </div>
@@ -450,7 +504,7 @@ export default function Home() {
       )}
 
       {/* Form Tambah Barang (Khusus Admin) */}
-      {isAdmin && (
+      {user.role === 'admin' && (
         <div style={{ background: '#eff6ff', padding: '20px', borderRadius: '8px', border: '1px solid #bfdbfe', marginBottom: '25px' }}>
           <h3 style={{ marginTop: 0, color: '#1e40af' }}>🛠️ Tambah Master Barang Baru</h3>
           <form onSubmit={handleAddItem} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px' }}>
@@ -476,7 +530,7 @@ export default function Home() {
       <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
         <input
           type="text"
-          placeholder={`🔍 Cari barang/kode part di area ${isAdmin ? 'Semua Area (Mode Admin)' : user.area}...`}
+          placeholder={`🔍 Cari barang/kode part di area ${user.role === 'admin' ? 'Semua Area' : user.area}...`}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '15px', boxSizing: 'border-box' }}
@@ -498,7 +552,7 @@ export default function Home() {
             <tr style={{ background: '#1e293b', color: '#fff', textAlign: 'left' }}>
               <th style={{ padding: '12px' }}>Nama Barang</th>
               <th style={{ padding: '12px' }}>Kode Part</th>
-              {isAdmin && <th style={{ padding: '12px' }}>Area</th>}
+              {user.role === 'admin' && <th style={{ padding: '12px' }}>Area</th>}
               <th style={{ padding: '12px' }}>Lokasi</th>
               <th style={{ padding: '12px', textAlign: 'center' }}>Stok</th>
               <th style={{ padding: '12px', textAlign: 'center' }}>Aksi Stok</th>
@@ -507,7 +561,7 @@ export default function Home() {
           <tbody>
             {filteredItems.length === 0 ? (
               <tr>
-                <td colSpan={isAdmin ? 6 : 5} style={{ textAlign: 'center', padding: '25px', color: '#94a3b8' }}>
+                <td colSpan={user.role === 'admin' ? 6 : 5} style={{ textAlign: 'center', padding: '25px', color: '#94a3b8' }}>
                   Tidak ada barang untuk area ini.
                 </td>
               </tr>
@@ -522,7 +576,7 @@ export default function Home() {
                       {isLowStock && <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', fontSize: '10px', padding: '2px 6px', borderRadius: '4px' }}>STOK TIPIS</span>}
                     </td>
                     <td style={{ padding: '12px', color: '#64748b' }}>{item.kode_part || '-'}</td>
-                    {isAdmin && <td style={{ padding: '12px', color: '#2563eb', fontWeight: 'bold' }}>{item.area || 'Pusat'}</td>}
+                    {user.role === 'admin' && <td style={{ padding: '12px', color: '#2563eb', fontWeight: 'bold' }}>{item.area || 'Pusat'}</td>}
                     <td style={{ padding: '12px', color: '#64748b' }}>{item.lokasi || '-'}</td>
                     <td style={{ padding: '12px', textAlign: 'center', fontSize: '18px', fontWeight: 'bold', color: isLowStock ? '#dc2626' : '#0f172a' }}>
                       {item.stok}
@@ -530,7 +584,7 @@ export default function Home() {
                     <td style={{ padding: '12px', textAlign: 'center' }}>
                       <button onClick={() => handleUpdateStok(item, -1)} style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 12px', marginRight: '5px', cursor: 'pointer', fontWeight: 'bold' }}>-1</button>
                       <button onClick={() => handleUpdateStok(item, 1)} style={{ background: '#22c55e', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 12px', cursor: 'pointer', fontWeight: 'bold' }}>+1</button>
-                      {isAdmin && (
+                      {user.role === 'admin' && (
                         <button onClick={() => { setTransferItem(item); setShowTransferModal(true); }} style={{ background: '#eab308', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 8px', marginLeft: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>🔄 Transfer</button>
                       )}
                     </td>
